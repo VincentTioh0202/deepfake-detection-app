@@ -31,6 +31,7 @@ class EfficientNetV2Deepfake(nn.Module):
         super().__init__()
         self.backbone = models.efficientnet_v2_m(weights=None)
         in_features = self.backbone.classifier[1].in_features
+
         self.backbone.classifier = nn.Sequential(
             nn.Dropout(dropout_rate),
             nn.Linear(in_features, 512),
@@ -85,10 +86,12 @@ eval_transform = transforms.Compose([
 def extract_faces(video_path):
     cap = cv2.VideoCapture(video_path)
     faces = []
+    frame_indices = []
     frame_count = 0
 
     while True:
         ret, frame = cap.read()
+
         if not ret:
             break
 
@@ -112,6 +115,7 @@ def extract_faces(video_path):
                         face = frame_rgb[y1:y2, x1:x2]
                         face = cv2.resize(face, (IMAGE_SIZE, IMAGE_SIZE))
                         faces.append(Image.fromarray(face))
+                        frame_indices.append(frame_count)
 
         if len(faces) >= MAX_FRAMES:
             break
@@ -119,7 +123,7 @@ def extract_faces(video_path):
         frame_count += 1
 
     cap.release()
-    return faces
+    return faces, frame_indices
 
 
 def predict_face(face):
@@ -144,7 +148,9 @@ def generate_gradcam(face):
             eigen_smooth=True
         )[0]
 
-    rgb_img = np.array(face.resize((IMAGE_SIZE, IMAGE_SIZE))).astype(np.float32) / 255.0
+    rgb_img = np.array(
+        face.resize((IMAGE_SIZE, IMAGE_SIZE))
+    ).astype(np.float32) / 255.0
 
     heatmap = show_cam_on_image(
         rgb_img,
@@ -155,18 +161,24 @@ def generate_gradcam(face):
     return rgb_img, heatmap
 
 
-def predict_video(video_path):
-    faces = extract_faces(video_path)
+def evaluate_video_level(video_path):
+    faces, frame_indices = extract_faces(video_path)
 
     if len(faces) == 0:
         return None
 
-    frame_probs = [predict_face(face) for face in faces]
+    frame_probs = []
 
-    video_prob = float(np.mean(frame_probs))
-    prediction = "Fake" if video_prob >= THRESHOLD else "Real"
+    for face in faces:
+        prob = predict_face(face)
+        frame_probs.append(prob)
 
-    if prediction == "Fake":
+    frame_probs = np.array(frame_probs)
+
+    video_fake_probability = float(np.mean(frame_probs))
+    video_prediction = "Fake" if video_fake_probability >= THRESHOLD else "Real"
+
+    if video_prediction == "Fake":
         selected_idx = int(np.argmax(frame_probs))
     else:
         selected_idx = int(np.argmin(frame_probs))
@@ -174,47 +186,76 @@ def predict_video(video_path):
     selected_face = faces[selected_idx]
     original_img, gradcam_img = generate_gradcam(selected_face)
 
+    frame_result_df = {
+        "Frame Index": frame_indices,
+        "Fake Probability": frame_probs.round(4),
+        "Frame Prediction": [
+            "Fake" if p >= THRESHOLD else "Real"
+            for p in frame_probs
+        ]
+    }
+
     return {
-        "prediction": prediction,
-        "fake_probability": video_prob,
+        "video_prediction": video_prediction,
+        "video_fake_probability": video_fake_probability,
         "threshold": THRESHOLD,
         "frames_used": len(faces),
+        "average_method": "Mean aggregation of frame-level fake probabilities",
+        "frame_result_df": frame_result_df,
+        "selected_frame_index": frame_indices[selected_idx],
+        "selected_frame_probability": float(frame_probs[selected_idx]),
         "original_img": original_img,
         "gradcam_img": gradcam_img
     }
 
 
 st.title("Deepfake Detection Using AI")
-st.write("Upload a video to classify whether it is Real or Fake with Grad-CAM explainability.")
+st.write(
+    "Upload a video to classify whether it is Real or Fake. "
+    "The system performs video-level evaluation with Grad-CAM explainability."
+)
 
 uploaded_file = st.file_uploader("Upload video", type=["mp4", "avi", "mov"])
 
 if uploaded_file is not None:
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_file:
-        temp_file.write(uploaded_file.read())
-        video_path = temp_file.name
+    video_bytes = uploaded_file.read()
 
-    st.video(video_path)
+    st.video(video_bytes)
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_file:
+        temp_file.write(video_bytes)
+        video_path = temp_file.name
 
     if st.button("Run Detection"):
         with st.spinner("Analysing video..."):
-            result = predict_video(video_path)
+            result = evaluate_video_level(video_path)
 
         if result is None:
             st.error("No valid face detected in the video.")
         else:
-            st.subheader("Prediction Result")
-            st.write(f"Prediction: **{result['prediction']}**")
-            st.write(f"Fake Probability: **{result['fake_probability']:.4f}**")
+            st.subheader("Video-Level Prediction Result")
+
+            st.write(f"Final Prediction: **{result['video_prediction']}**")
+            st.write(f"Video Fake Probability: **{result['video_fake_probability']:.4f}**")
             st.write(f"Threshold Used: **{result['threshold']}**")
             st.write(f"Frames Analysed: **{result['frames_used']}**")
+            st.write(f"Aggregation Method: **{result['average_method']}**")
 
-            if result["prediction"] == "Fake":
-                st.warning("The video is predicted as Fake.")
+            if result["video_prediction"] == "Fake":
+                st.warning("The uploaded video is predicted as Fake.")
             else:
-                st.success("The video is predicted as Real.")
+                st.success("The uploaded video is predicted as Real.")
+
+            st.subheader("Frame-Level Prediction Summary")
+            st.dataframe(result["frame_result_df"])
 
             st.subheader("Grad-CAM Explainability")
+
+            st.write(
+                f"Grad-CAM is generated from frame index "
+                f"**{result['selected_frame_index']}**, with fake probability "
+                f"**{result['selected_frame_probability']:.4f}**."
+            )
 
             col1, col2 = st.columns(2)
 
@@ -225,5 +266,6 @@ if uploaded_file is not None:
                 st.image(result["gradcam_img"], caption="Grad-CAM Heatmap")
 
             st.write(
-                "Warmer regions in the heatmap indicate facial areas that contributed more strongly to the model prediction."
+                "Warmer regions in the heatmap indicate facial areas that contributed more strongly "
+                "to the model prediction."
             )
