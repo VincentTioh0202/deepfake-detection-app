@@ -104,16 +104,19 @@ def convert_preview_to_h264(input_path):
         preview_path
     ]
 
-    try:
-        subprocess.run(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=True
-        )
-        return preview_path
-    except Exception:
+    result = subprocess.run(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True
+    )
+
+    if result.returncode != 0:
+        st.error("FFmpeg conversion failed:")
+        st.code(result.stderr)
         return None
+
+    return preview_path
 
 
 def extract_faces(video_path):
