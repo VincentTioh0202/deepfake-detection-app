@@ -61,17 +61,22 @@ def load_model():
     return model
 
 
-model = load_model()
+@st.cache_resource
+def load_mtcnn():
+    return MTCNN(
+        image_size=IMAGE_SIZE,
+        margin=30,
+        min_face_size=40,
+        thresholds=[0.6, 0.7, 0.7],
+        factor=0.709,
+        post_process=False,
+        device=device
+    )
 
-mtcnn = MTCNN(
-    image_size=IMAGE_SIZE,
-    margin=30,
-    min_face_size=40,
-    thresholds=[0.6, 0.7, 0.7],
-    factor=0.709,
-    post_process=False,
-    device=device
-)
+
+model = load_model()
+mtcnn = load_mtcnn()
+
 
 eval_transform = transforms.Compose([
     transforms.Resize((IMAGE_SIZE, IMAGE_SIZE), interpolation=InterpolationMode.BICUBIC),
@@ -85,6 +90,10 @@ eval_transform = transforms.Compose([
 
 def extract_faces(video_path):
     cap = cv2.VideoCapture(video_path)
+
+    if not cap.isOpened():
+        return [], []
+
     faces = []
     frame_indices = []
     frame_count = 0
@@ -210,28 +219,46 @@ def evaluate_video_level(video_path):
 
 
 st.title("Deepfake Detection Using AI")
+
 st.write(
     "Upload a video to classify whether it is Real or Fake. "
     "The system performs video-level evaluation with Grad-CAM explainability."
 )
 
-uploaded_file = st.file_uploader("Upload video", type=["mp4", "avi", "mov"])
+uploaded_file = st.file_uploader("Upload video", type=["mp4", "mov", "avi"])
 
 if uploaded_file is not None:
-    video_bytes = uploaded_file.read()
+    file_ext = os.path.splitext(uploaded_file.name)[1].lower()
 
-    st.video(video_bytes)
+    video_bytes = uploaded_file.getvalue()
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_file:
+    if file_ext == ".mp4":
+        video_mime = "video/mp4"
+    elif file_ext == ".mov":
+        video_mime = "video/quicktime"
+    elif file_ext == ".avi":
+        video_mime = "video/x-msvideo"
+    else:
+        video_mime = "video/mp4"
+
+    st.subheader("Uploaded Video Preview")
+    st.video(video_bytes, format=video_mime)
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as temp_file:
         temp_file.write(video_bytes)
         video_path = temp_file.name
+
+    st.info(
+        "If the preview is blank, please use an MP4 video encoded with H.264. "
+        "Some MOV/AVI videos may not play directly in the browser."
+    )
 
     if st.button("Run Detection"):
         with st.spinner("Analysing video..."):
             result = evaluate_video_level(video_path)
 
         if result is None:
-            st.error("No valid face detected in the video.")
+            st.error("No valid face detected in the video, or the video cannot be read.")
         else:
             st.subheader("Video-Level Prediction Result")
 
