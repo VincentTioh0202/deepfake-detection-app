@@ -280,7 +280,7 @@ if uploaded_file is not None:
     # st.caption("Detection uses the original uploaded video. The H.264 copy is only for browser preview.")
 
     if st.button("Run Detection"):
-        with st.spinner("Analysing original video..."):
+        with st.spinner("Analysing video..."):
             result = evaluate_video_level(video_path)
 
         if result is None:
