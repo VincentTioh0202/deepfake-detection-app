@@ -1,5 +1,6 @@
 import os
 import tempfile
+import subprocess
 import gdown
 import cv2
 import numpy as np
@@ -88,6 +89,33 @@ eval_transform = transforms.Compose([
 ])
 
 
+def convert_preview_to_h264(input_path):
+    preview_path = input_path + "_preview_h264.mp4"
+
+    command = [
+        "ffmpeg",
+        "-y",
+        "-i", input_path,
+        "-c:v", "libx264",
+        "-crf", "18",
+        "-preset", "fast",
+        "-c:a", "aac",
+        "-movflags", "+faststart",
+        preview_path
+    ]
+
+    try:
+        subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True
+        )
+        return preview_path
+    except Exception:
+        return None
+
+
 def extract_faces(video_path):
     cap = cv2.VideoCapture(video_path)
 
@@ -157,9 +185,7 @@ def generate_gradcam(face):
             eigen_smooth=True
         )[0]
 
-    rgb_img = np.array(
-        face.resize((IMAGE_SIZE, IMAGE_SIZE))
-    ).astype(np.float32) / 255.0
+    rgb_img = np.array(face.resize((IMAGE_SIZE, IMAGE_SIZE))).astype(np.float32) / 255.0
 
     heatmap = show_cam_on_image(
         rgb_img,
@@ -222,39 +248,36 @@ st.title("Deepfake Detection Using AI")
 
 st.write(
     "Upload a video to classify whether it is Real or Fake. "
-    "The system performs video-level evaluation with Grad-CAM explainability."
+    "The system uses the original uploaded video for detection, while a converted copy is used only for preview."
 )
 
-uploaded_file = st.file_uploader("Upload video", type=["mp4", "mov", "avi"])
+uploaded_file = st.file_uploader("Upload video", type=["mp4", "avi", "mov"])
 
 if uploaded_file is not None:
     file_ext = os.path.splitext(uploaded_file.name)[1].lower()
-
     video_bytes = uploaded_file.getvalue()
-
-    if file_ext == ".mp4":
-        video_mime = "video/mp4"
-    elif file_ext == ".mov":
-        video_mime = "video/quicktime"
-    elif file_ext == ".avi":
-        video_mime = "video/x-msvideo"
-    else:
-        video_mime = "video/mp4"
-
-    st.subheader("Uploaded Video Preview")
-    st.video(video_bytes, format=video_mime)
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as temp_file:
         temp_file.write(video_bytes)
         video_path = temp_file.name
 
-    st.info(
-        "If the preview is blank, please use an MP4 video encoded with H.264. "
-        "Some MOV/AVI videos may not play directly in the browser."
-    )
+    st.subheader("Uploaded Video Preview")
+
+    with st.spinner("Preparing video preview..."):
+        preview_path = convert_preview_to_h264(video_path)
+
+    if preview_path is not None:
+        st.video(preview_path)
+    else:
+        st.warning(
+            "Video preview is unavailable because FFmpeg conversion failed. "
+            "Detection can still run using the original video."
+        )
+
+    st.caption("Detection uses the original uploaded video. The H.264 copy is only for browser preview.")
 
     if st.button("Run Detection"):
-        with st.spinner("Analysing video..."):
+        with st.spinner("Analysing original video..."):
             result = evaluate_video_level(video_path)
 
         if result is None:
