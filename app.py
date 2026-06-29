@@ -277,7 +277,7 @@ if uploaded_file is not None:
             "Detection can still run using the original video."
         )
 
-    st.caption("Detection uses the original uploaded video. The H.264 copy is only for browser preview.")
+    # st.caption("Detection uses the original uploaded video. The H.264 copy is only for browser preview.")
 
     if st.button("Run Detection"):
         with st.spinner("Analysing original video..."):
